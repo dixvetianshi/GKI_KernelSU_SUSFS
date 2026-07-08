@@ -1184,9 +1184,52 @@ jobs:
           git clone --depth 1 https://github.com/Sakion-Team/Re-Kernel.git "$TMP_REKERNEL"
 
           # 准备驱动源码
+          
+          # 准备驱动源码（更稳健的实现）
+          # 准备驱动源码（更稳健的实现）
           mkdir -p common/drivers/rekernel
-          cp "$TMP_REKERNEL/LKM-Source/rekernel.c" common/drivers/rekernel/
-          cp "$TMP_REKERNEL/LKM-Source/rekernel.h" common/drivers/rekernel/
+
+          # 尝试常见路径列表
+          CANDIDATES=(
+            "$TMP_REKERNEL/LKM-Source/rekernel.c"
+            "$TMP_REKERNEL/LKM-Source/rekernel.h"
+            "$TMP_REKERNEL/LKM_Source/rekernel.c"
+            "$TMP_REKERNEL/LKM_Source/rekernel.h"
+            "$TMP_REKERNEL/rekernel.c"
+            "$TMP_REKERNEL/rekernel.h"
+          )
+          
+          found=0
+          for p in "${CANDIDATES[@]}"; do
+            if [ -f "$p" ]; then
+              cp "$p" common/drivers/rekernel/
+              echo "Copied $p"
+              found=1
+            fi
+          done
+          
+          # 如果还没找到，尝试自动查找
+          if [ "$found" -eq 0 ]; then
+            echo "未在预设路径找到 rekernel 源文件，尝试自动查找..."
+            file_c=$(find "$TMP_REKERNEL" -type f -iname 'rekernel.c' -print -quit)
+            file_h=$(find "$TMP_REKERNEL" -type f -iname 'rekernel.h' -print -quit)
+            if [ -n "$file_c" ]; then
+              cp "$file_c" common/drivers/rekernel/
+              echo "Copied $file_c"
+              found=1
+            fi
+            if [ -n "$file_h" ]; then
+              cp "$file_h" common/drivers/rekernel/
+              echo "Copied $file_h"
+              found=1
+            fi
+          fi
+          
+          if [ "$found" -eq 0 ]; then
+            echo "::error::找不到 rekernel.c / rekernel.h，Re-Kernel 集成失败。请检查 https://github.com/Sakion-Team/Re-Kernel 仓库结构或将源文件放入仓库。"
+            # 如果你希望流程继续而不是退出，把下面一行注释掉
+            exit 1
+          fi
 
           # 生成构建配置
           cat > common/drivers/rekernel/Kconfig << 'EOF'
