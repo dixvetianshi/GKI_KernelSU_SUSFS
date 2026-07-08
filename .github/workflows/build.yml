@@ -1174,6 +1174,7 @@ jobs:
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig
 
       - name: 应用 Re-Kernel
+      
         if: inputs.use_rekernel
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
@@ -1184,52 +1185,9 @@ jobs:
           git clone --depth 1 https://github.com/Sakion-Team/Re-Kernel.git "$TMP_REKERNEL"
 
           # 准备驱动源码
-          
-          # 准备驱动源码（更稳健的实现）
-          # 准备驱动源码（更稳健的实现）
           mkdir -p common/drivers/rekernel
-
-          # 尝试常见路径列表
-          CANDIDATES=(
-            "$TMP_REKERNEL/LKM-Source/rekernel.c"
-            "$TMP_REKERNEL/LKM-Source/rekernel.h"
-            "$TMP_REKERNEL/LKM_Source/rekernel.c"
-            "$TMP_REKERNEL/LKM_Source/rekernel.h"
-            "$TMP_REKERNEL/rekernel.c"
-            "$TMP_REKERNEL/rekernel.h"
-          )
-          
-          found=0
-          for p in "${CANDIDATES[@]}"; do
-            if [ -f "$p" ]; then
-              cp "$p" common/drivers/rekernel/
-              echo "Copied $p"
-              found=1
-            fi
-          done
-          
-          # 如果还没找到，尝试自动查找
-          if [ "$found" -eq 0 ]; then
-            echo "未在预设路径找到 rekernel 源文件，尝试自动查找..."
-            file_c=$(find "$TMP_REKERNEL" -type f -iname 'rekernel.c' -print -quit)
-            file_h=$(find "$TMP_REKERNEL" -type f -iname 'rekernel.h' -print -quit)
-            if [ -n "$file_c" ]; then
-              cp "$file_c" common/drivers/rekernel/
-              echo "Copied $file_c"
-              found=1
-            fi
-            if [ -n "$file_h" ]; then
-              cp "$file_h" common/drivers/rekernel/
-              echo "Copied $file_h"
-              found=1
-            fi
-          fi
-          
-          if [ "$found" -eq 0 ]; then
-            echo "::error::找不到 rekernel.c / rekernel.h，Re-Kernel 集成失败。请检查 https://github.com/Sakion-Team/Re-Kernel 仓库结构或将源文件放入仓库。"
-            # 如果你希望流程继续而不是退出，把下面一行注释掉
-            exit 1
-          fi
+          cp "$TMP_REKERNEL/LKM-Source/rekernel_main.c" common/drivers/rekernel/
+          cp "$TMP_REKERNEL/LKM-Source/rekernel.h" common/drivers/rekernel/
 
           # 生成构建配置
           cat > common/drivers/rekernel/Kconfig << 'EOF'
@@ -1277,6 +1235,47 @@ jobs:
           grep -q '^CONFIG_REKERNEL_NETWORK=y$' "$DEFCONFIG" || echo "CONFIG_REKERNEL_NETWORK=y" >> "$DEFCONFIG"
 
       - name: 配置内核选项
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          cat >> "$DEFCONFIG" << 'EOF'
+          CONFIG_KSU=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          EOF
+
+          if [ "${{ inputs.ksu_variant }}" == "SukiSU" ] || [ "${{ inputs.ksu_variant }}" == "SukiSU(40726)" ] || [ "${{ inputs.ksu_variant }}" == "SukiSU(40548)" ] || [ "${{ inputs.ksu_variant }}" == "ReSukiSU" ] || [ "${{ inputs.ksu_variant }}" == "Next" ]; then
+            if [[ "${{ inputs.use_kpm }}" == enabled* ]] || [[ "${{ inputs.use_kpm }}" == patched* ]]; then
+              if ! grep -RqsE '^[[:space:]]*config[[:space:]]+KPM([[:space:]]|$)' common KernelSU 2>/dev/null; then
+                echo "错误: 已请求启用 KPM，但当前 KernelSU 代码未声明 CONFIG_KPM" >&2
+                exit 1
+              fi
+              echo "CONFIG_KPM=y" >> "$DEFCONFIG"
+            fi
+          fi
+
+          CURRENT_SUB="${{ inputs.sub_level }}"
+          if [[ ! "$CURRENT_SUB" =~ ^[0-9]+$ ]]; then
+            CURRENT_SUB=99999
+          fi
+          if [[ "${{ inputs.ksu_variant }}" == "ReSukiSU" && "${{ inputs.android_version }}" == "android13" && "${{ inputs.kernel_version }}" == "5.15" && "$CURRENT_SUB" -ge 74 && "$CURRENT_SUB" -le 137 ]]; then
+            {
+              echo "CONFIG_KALLSYMS=y"
+              echo "CONFIG_KALLSYMS_ALL=y"
+            } >> "$DEFCONFIG"
+            # 修复 5.15.74~5.15.137: kallsyms_on_each_symbol 仅在 LIVEPATCH 下编译，导致 ReSukiSU 链接失败
+            KALLSYMS_C="./common/kernel/kallsyms.c"
+            if [ -f "$KALLSYMS_C" ] \
+              && grep -qF 'int kallsyms_on_each_symbol' "$KALLSYMS_C" \
+              && grep -qF '#endif /* CONFIG_LIVEPATCH */' "$KALLSYMS_C"; then
+              sed -i '/^#ifdef CONFIG_LIVEPATCH$/,/^int kallsyms_on_each_symbol/ { /^#ifdef CONFIG_LIVEPATCH$/d }' "$KALLSYMS_C"
+              sed -i '/^int kallsyms_on_each_symbol/,/^#endif \/\* CONFIG_LIVEPATCH \*\// { /^#endif \/\* CONFIG_LIVEPATCH \*\//d }' "$KALLSYMS_C"
+              echo "已修复 kallsyms_on_each_symbol 的 LIVEPATCH 编译限制"
+            fi
+          fi
+
+          sed -i 's/check_defconfig//' ./common/build.config.gki
+
+           - name: 配置内核选项
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           cat >> "$DEFCONFIG" << 'EOF'
